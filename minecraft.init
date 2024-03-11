@@ -1,0 +1,347 @@
+#!/usr/bin/bash
+#
+# vim: set tabstop=2; set expandtab
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+# Settings
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+USERNAME=minecraft
+MCPATH="/home/minecraft/minecraft-server-1.20.4"
+
+SERVICE="${MCPATH}/server-1.20.4.jar"
+JAVABIN="/usr/bin/java"
+
+CPU_COUNT=6
+MEMmx=10G
+MEMms=${MEMmx}
+OPTIONS="-nogui"
+
+# -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true"
+GCOPTIONS1="-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch "
+GCOPTIONS2="-XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 "
+GCOPTIONS3="-XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 "
+GCOPTIONS4="-XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1"
+GCOPTIONS="${GCOPTIONS1} ${GCOPTIONS2} ${GCOPTIONS3} ${GCOPTIONS4}" 
+DEBUGOPTIONS="-Xlog:gc*:logs/gc.log:time,uptime:filecount=5,filesize=1M"
+SERVICEOPTIONS="-Xmx${MEMmx} -Xms${MEMms} -XX:ParallelGCThreads=${CPU_COUNT} ${GCOPTIONS} ${DEBUGOPTIONS} -jar ${SERVICE} ${OPTIONS}"
+INVOCATION="${JAVABIN} ${SERVICEOPTIONS}" 
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+# Backup settings
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+### WORLD="server42.1"
+WORLD="world"
+# WORLDS="${WORLD} ${WORLD}_nether ${WORLD}_the_end"
+WORLDS="${WORLD}"
+BACKUPPATH="${MCPATH}/backup"
+NO_OF_DAYS_TO_SAVE=2
+LOGFILE="logs/latest.log"
+
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+# Main
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+cd ${MCPATH}
+
+mc_start() {
+  cd ${MCPATH}
+  if  pgrep -u ${USERNAME} -f ${SERVICE} > /dev/null
+  then
+    echo "${SERVICE} is already running!"
+  else
+    echo "Starting ${SERVICE}..."
+    cd ${MCPATH} && /usr/bin/screen -d -m -S minecraft ${INVOCATION}
+    # cd ${MCPATH} && /usr/bin/java ${SERVICEOPTIONS}
+    sleep 3
+    if pgrep -u ${USERNAME} -f ${SERVICE} > /dev/null
+    then
+      echo "${SERVICE} is now running."
+    else
+      echo "Error! Could not start ${SERVICE}!"
+    fi
+  fi
+}
+
+mc_saveoff() {
+  if pgrep -u ${USERNAME} -f ${SERVICE} > /dev/null
+  then
+    # echo "${SERVICE} is running... suspending saves"
+    echo "suspending saves"
+    /usr/bin/screen -p 0 -t 0 -S minecraft -X stuff "say Suspending saves... \015"
+    /usr/bin/screen -p 0 -t 0 -S minecraft -X stuff "save-off\015"
+    /usr/bin/screen -p 0 -t 0 -S minecraft -X stuff "save-all\015"
+    /usr/bin/screen -p 0 -t 0 -S minecraft -X stuff "say Saves suspended\015"
+    sync
+  else
+    echo "${SERVICE} is not running. Not suspending saves."
+  fi
+}
+
+mc_saveon() {
+  if pgrep -u ${USERNAME} -f ${SERVICE} > /dev/null
+  then
+    # echo "${SERVICE} is running... re-enabling saves"
+    echo "re-enabling saves"
+    /usr/bin/screen -p 0 -t 0 -S minecraft -X stuff "save-on\015"
+  else
+    echo "${SERVICE} is not running. Not resuming saves."
+  fi
+}
+
+mc_stop() {
+  if pgrep -u ${USERNAME} -f ${SERVICE} > /dev/null
+  then
+    echo "Stopping ${SERVICE}"
+    /usr/bin/screen -p 0 -t 0 -S minecraft -X stuff "say SERVER SHUTTING DOWN IN 30 SECONDS. Saving map...\015"
+    /usr/bin/screen -p 0 -t 0 -S minecraft -X stuff "save-all\015"
+    sleep 30
+    /usr/bin/screen -p 0 -t 0 -S minecraft -X stuff "stop\015"
+    # sleep 7
+  else
+    echo "${SERVICE} was not running."
+  fi
+  n=120
+  while [[ $n > 0 ]]
+  do
+      pgrep -f ${SERVICE} > /dev/null || break
+      # mytime=$((date +"%Y-%m-%d %H:%M:%S.%s"))
+      mytime=$(date +"%Y-%m-%d %H:%M:%S")
+      printf "$mytime: process still alive, sleeping 5 seconds...\n"
+      sleep 5
+      n=$((n-1))
+  done
+
+    if pgrep -u ${USERNAME} -f ${SERVICE} > /dev/null
+    then
+        echo "Error! ${SERVICE} could not be stopped."
+    else
+        echo "${SERVICE} is stopped."
+    fi
+}
+
+### mc_update() {
+###   if pgrep -u ${USERNAME} -f ${SERVICE} > /dev/null
+###   then
+###     echo "${SERVICE} is running! Will not start update."
+###   else
+###     cd ${MCPATH} && wget -q -O ${MCPATH}/${SERVICE}.update http://dl.bukkit.org/downloads/craftbukkit/get/latest-beta/craftbukkit-beta.jar
+### 
+###     if [ -f ${MCPATH}/${SERVICE}.update ]
+###     then
+###       if `diff ${MCPATH}/${SERVICE} ${MCPATH}/${SERVICE}.update >/dev/null`
+###       then 
+###         echo "You are already running the latest version of ${SERVICE}."
+###       else
+###         mv ${MCPATH}/${SERVICE} ${MCPATH}/${SERVICE}.old
+###         mv ${MCPATH}/${SERVICE}.update ${MCPATH}/${SERVICE}
+###         echo "Minecraft successfully updated."
+###       fi
+###     else
+###       echo "Minecraft update could not be downloaded."
+###     fi
+###   fi
+### }
+
+mc_backup() {
+   cd ${MCPATH}
+
+   # Create backupdir, unless it already exists.
+   [[ ! -d ${BACKUPPATH} ]] && { printf "Creating backupdir ${BACKUPPATH}\n"; mkdir -v ${BACKUPPATH}; }
+
+   # first delete old backup files ($NO_OF_DAYS_TO_SAVE):
+   /usr/bin/find ${MCPATH}/backup -name "*gz" -mtime +${NO_OF_DAYS_TO_SAVE} -exec rm {} \;
+   /usr/bin/find ${MCPATH}/backup -name "*bzip" -mtime +${NO_OF_DAYS_TO_SAVE} -exec rm {} \;
+   # /usr/bin/find ${MCPATH}/backup -name "*jar" -mtime +${NO_OF_DAYS_TO_SAVE} -exec rm {} \;
+   # /usr/bin/find ${MCPATH}/backup -name "*" -mtime +${NO_OF_DAYS_TO_SAVE} -exec rm {} \;
+
+   echo "Backing up minecraft worlds..."
+   /usr/bin/screen -p 0 -t 0 -S minecraft -X stuff "say Backing up the server. Please hold... \015"
+   sleep 60
+
+   for thisworld in ${WORLDS} 
+   do
+	   # if [ ! -f $BACKUPPATH/${thisworld}_`date "+%Y.%m.%d_%H.%M"`.tar.bzip ]
+	   if [ ! -f $BACKUPPATH/${thisworld}_`date "+%Y.%m.%d_%H.%M"`.tar.gz ]
+	   then
+	     # /usr/bin/tar zcf $BACKUPPATH/${thisworld}_`date "+%Y.%m.%d_%H.%M"`.tar.bzip ${thisworld}
+	     /usr/bin/tar zcf $BACKUPPATH/${thisworld}_`date "+%Y.%m.%d_%H.%M"`.tar.gz ${thisworld}
+    	 echo "Backed up world ${thisworld}"
+	   fi
+   done
+   ### # backup plugins
+   ### if [ ! -f $BACKUPPATH/plugins_`date "+%Y.%m.%d_%H.%M"` ]
+   ### then
+   ###  /usr/bin/tar zcf $BACKUPPATH/plugins_`date "+%Y.%m.%d_%H.%M"`.tar.bzip plugins
+   ###  echo "Backed up plugins."
+   ### fi
+   
+   # backup settings
+   # if [ ! -f $BACKUPPATH/settings_`date "+%Y.%m.%d_%H.%M"`.tar.bzip ]
+   if [ ! -f $BACKUPPATH/settings_`date "+%Y.%m.%d_%H.%M"`.tar.gz ]
+   then
+     # /usr/bin/tar zcf $BACKUPPATH/settings_`date "+%Y.%m.%d_%H.%M"`.tar.bzip ${LOGFILE} {server.properties,*txt,*init,*yml}
+     # /usr/bin/tar jcf $BACKUPPATH/settings_`date "+%Y.%m.%d_%H.%M"`.tar.bzip {logs,libraries,server.properties,*init,*json,*sh,*txt}
+     /usr/bin/tar zcf $BACKUPPATH/settings_`date "+%Y.%m.%d_%H.%M"`.tar.gz {logs,libraries,server.properties,*init,*json,*sh,*txt}
+     echo "Backed up settings."
+   fi
+
+   # backup jar file
+   echo "Backing up ${SERVICE}"
+   if [ ! -f "$BACKUPPATH/${SERVICE}" ]
+   then
+      cd ${MCPATH} && cp -p ${SERVICE} "${BACKUPPATH}/"
+   fi
+
+   # backup location files
+   echo "Backing up mc location files"
+   /usr/bin/tar zcf $BACKUPPATH/mclocations_`date "+%Y.%m.%d_%H.%M"`.tar.gz mc*
+
+   /usr/bin/screen -p 0 -t 0 -S minecraft -X stuff "say Backup complete. Re-enabling saves. \015"
+   echo "Backup complete"
+}
+
+mc_command() {
+  # cd ${MCPATH}
+  command="$1";
+  if pgrep -u ${USERNAME} -f ${SERVICE} > /dev/null
+  then
+    pre_log_len=`wc -l "${LOGFILE}" | awk '{print $1}'`
+    # echo "${SERVICE} is running... executing command"
+    # echo "executing command"
+    /usr/bin/screen -p 0 -t 0 -S minecraft -X stuff "$command\015"
+    sleep .1 # assumes that the command will run and print to the log file in less than .1 seconds
+    # print output
+    tail -n $[`wc -l "${LOGFILE}" | awk '{print $1}'`-$pre_log_len] "${LOGFILE}"
+  else
+    printf "Server is not running\n"
+    exit 1
+  fi
+}
+
+# teleport function
+mc_teleport() {
+  command="teleport"
+  player="$1"
+  destination="$2"
+  if pgrep -u ${USERNAME} -f ${SERVICE} > /dev/null
+  then
+    mc_command "$command $player $destination"
+  else
+    printf "Server is not running\n"
+    exit 1
+  fi
+}
+
+# give function
+mc_give() {
+  command="give"
+  echo $0
+  player="$1"
+  item="$2"
+  number="$3"
+  if pgrep -u ${USERNAME} -f ${SERVICE} > /dev/null
+  then
+    mc_command "$command $player $item $number"
+  else
+    printf "Server is not running\n"
+    exit 1
+  fi
+}
+
+
+#Start-Stop here
+case "$1" in
+  start)
+    mc_start
+    ;;
+  stop)
+    mc_stop
+    ;;
+  restart)
+    mc_stop
+    mc_start
+    ;;
+  backup)
+    mc_saveoff
+    #sleep 10
+    mc_backup
+    mc_saveon
+    ;;
+  saveoff)
+      mc_saveoff
+      ;;
+  saveon)
+      mc_saveon
+      ;;
+  status)
+    if pgrep -u ${USERNAME} -f ${SERVICE} > /dev/null
+    then
+      echo "${SERVICE} is running."
+    else
+      echo "${SERVICE} is not running."
+    fi
+    ;;
+  command)
+    if [ $# -gt 1 ]; then
+      shift
+      mc_command "$*"
+    else
+      echo "Must specify server command (try 'help'?)"
+      echo "Usage: minecraft.init {start|stop|update|backup|status|restart|command \"server command\"}"
+    fi
+    ;;
+  teleport|tp)
+    if [ $# -eq 3 ]; then
+      shift
+      mc_teleport "$1" "$2"
+    else
+      printf "Must specify user and destination\n"
+      printf "Usage: minecraft.init teleport <user> <destination>\n" 
+    fi
+    ;;
+
+  give)
+    if [ $# -eq 4 ]; then
+      shift
+      mc_give "$1" "$2" "$3"
+    else
+      printf "Must specify user and item\n"
+      printf "Usage: minecraft.init give <user> <item> <number of items>\n" 
+    fi
+    ;;
+
+  day)
+    if [ $# -eq 1 ]; then
+      shift
+      mc_command "time set day"
+    else
+      printf "Usage: minecraft.init day\n" 
+    fi
+    ;;
+
+  night)
+    if [ $# -eq 1 ]; then
+      shift
+      mc_command "time set night"
+    else
+      printf "Usage: minecraft.init night\n" 
+    fi
+    ;;
+
+  clear)
+    if [ $# -eq 1 ]; then
+      shift
+      mc_command "weather clear"
+    else
+      printf "Usage: minecraft.init clear\n" 
+    fi
+    ;;
+
+
+  *)
+  echo "Usage: minecraft.init {start|stop|update|backup|status|restart|command \"server command\"}"
+  exit 1
+  ;;
+esac
+
+exit 0
